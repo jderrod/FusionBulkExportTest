@@ -1,0 +1,24 @@
+{
+  "unit": "mm",
+  "outputDirectory": "C:/Users/james.derrod/CascadeProjects/Fusion2/exports",
+  "models": [
+    {
+      "name": "Prototype_A",
+      "height": 25,
+      "width": 40,
+      "thickness": 3
+    },
+    {
+      "name": "Prototype_B",
+      "height": 35,
+      "width": 60,
+      "thickness": 5
+    },
+    {
+      "name": "Prototype_C",
+      "height": 50,
+      "width": 80,
+      "thickness": 7
+    }
+  ]
+}

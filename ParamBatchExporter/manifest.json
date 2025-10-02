@@ -1,0 +1,22 @@
+{
+  "autodeskProduct": "fusion360",
+  "type": "addin",
+  "id": "com.cascade.ParamBatchExporter",
+  "author": "Cascade",
+  "description": {
+    "en": "Batch apply parameter sets from JSON and export models as STEP files."
+  },
+  "version": "1.0.0",
+  "supportedOS": [
+    "windows"
+  ],
+  "limits": {
+    "supportedLL": []
+  },
+  "files": [
+    {
+      "path": "ParamBatchExporter.py",
+      "type": "script"
+    }
+  ]
+}
