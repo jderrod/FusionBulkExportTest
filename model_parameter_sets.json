@@ -1,24 +1,27 @@
 {
   "unit": "mm",
   "outputDirectory": "C:/Users/james.derrod/CascadeProjects/Fusion2/exports",
+  "gcodeDirectory": "C:/Users/james.derrod/CascadeProjects/Fusion2/gcode",
+  "ncProgramName": "NCProgram10",
+  "operationName": "[T101] Pocket1",
   "models": [
     {
       "name": "Prototype_A",
-      "height": 25,
-      "width": 40,
-      "thickness": 3
+      "height": 914.4,
+      "width": 1066.8,
+      "thickness": 12.7
     },
     {
       "name": "Prototype_B",
-      "height": 35,
-      "width": 60,
-      "thickness": 5
+      "height": 1524,
+      "width": 1371.6,
+      "thickness": 12.7
     },
     {
       "name": "Prototype_C",
-      "height": 50,
-      "width": 80,
-      "thickness": 7
+      "height": 2133.6,
+      "width": 1828.8,
+      "thickness": 19.05
     }
   ]
 }

@@ -4,9 +4,11 @@
 
 import adsk.core
 import adsk.fusion
+import adsk.cam
 import json
 import os
 import traceback
+import time
 
 _app = None
 _ui = None
@@ -166,10 +168,15 @@ def process_parameter_sets(json_path):
         if not design:
             return BatchResult(False, ['Active design not found. Open a Fusion design (.f3d/.3mf/.3d) before running the exporter.'])
 
+        design_workspace = get_active_workspace(app)
+
         data = load_parameter_sets(json_path)
         unit = data.get('unit', 'mm')
         models = data.get('models', [])
         output_dir = data.get('outputDirectory')
+        gcode_dir = data.get('gcodeDirectory')
+        nc_program_name = data.get('ncProgramName')
+        operation_name = data.get('operationName')
 
         if not isinstance(models, list) or not models:
             return BatchResult(False, ['No models found in JSON file.'])
@@ -178,6 +185,8 @@ def process_parameter_sets(json_path):
             return BatchResult(False, ['"outputDirectory" is missing in JSON file.'])
 
         os.makedirs(output_dir, exist_ok=True)
+        if gcode_dir:
+            os.makedirs(gcode_dir, exist_ok=True)
 
         messages = []
         overall_success = True
@@ -188,6 +197,16 @@ def process_parameter_sets(json_path):
                 apply_parameters(design, model, unit)
                 export_path = export_model(design, output_dir, model_name)
                 messages.append(f'{model_name}: Exported to {export_path}')
+
+                if gcode_dir and nc_program_name and operation_name:
+                    cam = activate_manufacture_workspace(app)
+                    if not cam:
+                        raise RuntimeError('CAM workspace not available. Switch to Manufacture workspace once per session to load CAM product.')
+                    gcode_path = generate_gcode(cam, nc_program_name, operation_name, gcode_dir, model_name)
+                    messages.append(f'{model_name}: G-code posted to {gcode_path}')
+                    restore_workspace(app, design_workspace)
+                elif any([gcode_dir, nc_program_name, operation_name]):
+                    messages.append(f'{model_name}: Skipped G-code posting because configuration is incomplete.')
             except Exception as process_error:
                 overall_success = False
                 messages.append(f'{model_name}: FAILED ({process_error})')
@@ -242,10 +261,175 @@ def export_model(design, output_dir, model_name):
     return export_path
 
 
+def generate_gcode(cam, nc_program_name, operation_name, output_dir, model_name):
+    operation = find_operation_by_name(cam, operation_name)
+    if not operation:
+        raise ValueError(f'CAM operation not found: {operation_name}')
+
+    generate_operation_toolpath(operation)
+
+    nc_program = find_nc_program_by_name(cam, nc_program_name)
+    if not nc_program:
+        raise ValueError(f'NC program not found: {nc_program_name}')
+
+    safe_model = sanitize_filename(model_name)
+    safe_operation = sanitize_filename(operation_name)
+    output_path = os.path.join(output_dir, f'{safe_model}_{safe_operation}.nc')
+
+    if not nc_program.postToNCFile(output_path):
+        raise RuntimeError(f'Failed to post NC program {nc_program_name}')
+
+    return output_path
+
+
+def generate_operation_toolpath(operation):
+    if not operation.isValid:
+        raise RuntimeError(f'Operation {operation.name} is not valid.')
+
+    needs_regen = (not operation.isToolpathComputed or operation.isToolpathOutOfDate or
+                   operation.hasToolpathWarning or operation.hasToolpathError)
+
+    if needs_regen:
+        if not operation.generateToolpath():
+            raise RuntimeError(f'Failed to start toolpath generation for {operation.name}.')
+
+        start_time = time.time()
+        timeout = 120
+        while operation.isGenerating:
+            adsk.doEvents()
+            if time.time() - start_time > timeout:
+                raise TimeoutError(f'Toolpath generation timed out for {operation.name}.')
+
+    if operation.hasToolpathError:
+        raise RuntimeError(f'Toolpath error detected for {operation.name}.')
+
+
 def sanitize_filename(name):
     invalid_chars = '<>:"/\\|?*'
     sanitized = ''.join('_' if ch in invalid_chars else ch for ch in name)
-    return sanitized.strip() or 'model'
+    sanitized = sanitized.replace(' ', '_')
+    return sanitized.strip('_') or 'model'
+
+
+def get_cam_product(app):
+    cam_product = None
+
+    if hasattr(app, 'products'):
+        try:
+            cam_product = app.products.itemByProductType('CAMProductType')
+        except AttributeError:
+            cam_product = None
+
+    if not cam_product:
+        doc = app.activeDocument if hasattr(app, 'activeDocument') else None
+        if doc and hasattr(doc, 'products'):
+            try:
+                cam_product = doc.products.itemByProductType('CAMProductType')
+            except AttributeError:
+                cam_product = None
+
+    if not cam_product:
+        return None
+
+    return adsk.cam.CAM.cast(cam_product)
+
+
+def activate_manufacture_workspace(app):
+    ui = app.userInterface
+    cam_workspace = ui.workspaces.itemById('CAMEnvironment') if ui else None
+    if cam_workspace:
+        cam_workspace.activate()
+    cam_product = get_cam_product(app)
+    return cam_product
+
+
+def restore_workspace(app, previous_workspace):
+    if not previous_workspace:
+        return
+    try:
+        previous_workspace.activate()
+    except Exception:
+        pass
+
+
+def get_active_workspace(app):
+    ui = app.userInterface
+    if not ui:
+        return None
+    try:
+        return ui.activeWorkspace
+    except AttributeError:
+        pass
+    try:
+        workspaces = ui.workspaces
+        for index in range(workspaces.count):
+            workspace = workspaces.item(index)
+            if workspace and workspace.isActive:
+                return workspace
+    except Exception:
+        pass
+    return None
+
+
+def find_operation_by_name(cam, target_name):
+    operations = cam.allOperations
+    normalized_target = normalize_operation_name(target_name)
+
+    if hasattr(operations, 'itemByName'):
+        try:
+            op = operations.itemByName(target_name)
+            if op:
+                return op
+        except AttributeError:
+            pass
+
+    for index in range(operations.count):
+        op = operations.item(index)
+        if not op:
+            continue
+        if op.name == target_name:
+            return op
+        if normalize_operation_name(op.name) == normalized_target:
+            return op
+        if normalized_target and normalized_target in normalize_operation_name(op.name):
+            return op
+    return None
+
+
+def find_nc_program_by_name(cam, target_name):
+    programs = cam.ncPrograms
+    if hasattr(programs, 'itemByName'):
+        try:
+            program = programs.itemByName(target_name)
+            if program:
+                return program
+        except AttributeError:
+            pass
+
+    for index in range(programs.count):
+        program = programs.item(index)
+        if program and program.name == target_name:
+            return program
+    return None
+
+
+def normalize_operation_name(name):
+    if not name:
+        return ''
+    cleaned = []
+    skip = False
+    for ch in name:
+        if ch == '[':
+            skip = True
+            continue
+        if ch == ']':
+            skip = False
+            continue
+        if not skip:
+            cleaned.append(ch)
+    normalized = ''.join(cleaned).strip().lower()
+    normalized = normalized.replace(' ', '')
+    return normalized
 
 
 def write_text(message):
